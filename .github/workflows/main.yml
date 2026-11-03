@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Get TR3600 source
+      - name: Checkout TR3600 repository
         uses: actions/checkout@v4
 
       - name: Install build dependencies
@@ -28,11 +28,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: openwrt/dl
-          key: openwrt-dl-tr3600-25.12-v2
+          key: openwrt-tr3600-awg-25.12-v3
           restore-keys: |
+            openwrt-tr3600-awg-25.12-
             openwrt-dl-tr3600-25.12-
 
-      - name: Prepare exact TR3600 source
+      - name: Download exact TR3600 OpenWrt source
         run: |
           git clone --depth 1 -b openwrt-25.12 \
             https://github.com/openwrt/openwrt.git openwrt
@@ -44,20 +45,25 @@ jobs:
           echo "OpenWrt PR commit: $ACTUAL"
 
           if [ "$ACTUAL" != "046aec0d" ]; then
-            echo "ERROR: PR source revision changed!"
+            echo "ERROR: Unexpected OpenWrt source revision"
             exit 1
           fi
 
           git checkout -f FETCH_HEAD
           git apply ../cudy-tr3600-v1-fixes.patch
 
-          ./scripts/feeds update -a
+      - name: Prepare only required feeds
+        run: |
+          cd openwrt
 
-          # Устанавливаем только необходимые компоненты LuCI.
-          # Не используем feeds install -a: он подключал лишние пакеты.
-          ./scripts/feeds install -p luci luci-base luci-lib-uqr
+          ./scripts/feeds update luci packages
 
-      - name: Add AmneziaWG packages
+          ./scripts/feeds install -p luci \
+            luci-base luci-lib-uqr
+
+          ./scripts/feeds install -p packages resolveip
+
+      - name: Add AmneziaWG source packages
         run: |
           git clone --depth 1 \
             https://github.com/Slava-Shchipunov/awg-openwrt.git awg
@@ -68,7 +74,7 @@ jobs:
           cp -r awg/amneziawg-tools openwrt/package/awg/
           cp -r awg/luci-proto-amneziawg openwrt/package/awg/
 
-      - name: Configure TR3600 and AmneziaWG
+      - name: Configure Cudy TR3600 and AmneziaWG
         run: |
           cd openwrt
 
@@ -77,51 +83,66 @@ jobs:
           CONFIG_TARGET_mediatek_filogic=y
           CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y
 
-          CONFIG_PACKAGE_kmod-wireguard=y
-          CONFIG_PACKAGE_wireguard-tools=y
-          CONFIG_PACKAGE_luci-proto-wireguard=y
-
-          CONFIG_PACKAGE_kmod-gre=y
-          CONFIG_PACKAGE_gre=y
           CONFIG_PACKAGE_kmod-tun=y
           CONFIG_PACKAGE_ip-full=y
 
           CONFIG_PACKAGE_kmod-amneziawg=m
           CONFIG_PACKAGE_amneziawg-tools=y
+
           CONFIG_PACKAGE_luci-base=y
           CONFIG_PACKAGE_luci-lib-uqr=y
+          CONFIG_PACKAGE_resolveip=y
           CONFIG_PACKAGE_luci-proto-amneziawg=y
           EOF
 
           make defconfig
 
-          grep -q "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y" .config
-          grep -q "CONFIG_PACKAGE_kmod-amneziawg=m" .config
+          echo "===== TARGET CONFIGURATION ====="
+          grep 'CONFIG_TARGET_mediatek' .config || true
 
-          echo "Build configuration:"
-          grep -E 'CONFIG_TARGET_mediatek|CONFIG_PACKAGE_(kmod-amneziawg|amneziawg-tools|luci-proto-amneziawg)' .config
+          echo "===== AMNEZIAWG CONFIGURATION ====="
+          grep -E 'CONFIG_PACKAGE_(kmod-amneziawg|amneziawg-tools|luci-proto-amneziawg|luci-base|luci-lib-uqr|resolveip)' .config || true
 
-      - name: Prepare build tools
+          echo "===== CONFIGURATION COMPLETE ====="
+
+      - name: Install build tools
         run: |
           cd openwrt
           make tools/install -j2
           make toolchain/install -j2
 
-      - name: Build matching TR3600 kernel
+      - name: Build TR3600 kernel
         run: |
           cd openwrt
           make -j2 target/linux/compile V=s
 
-      - name: Build AmneziaWG packages
+      - name: Build AmneziaWG kernel module
         run: |
           cd openwrt
           make -j2 package/awg/kmod-amneziawg/compile V=s
+
+      - name: Build AmneziaWG tools
+        run: |
+          cd openwrt
           make -j2 package/awg/amneziawg-tools/compile V=s
+
+      - name: Build AmneziaWG LuCI interface
+        run: |
+          cd openwrt
           make -j2 package/awg/luci-proto-amneziawg/compile V=s
 
-      - name: Save packages
+      - name: Check generated packages
+        run: |
+          echo "===== GENERATED PACKAGES ====="
+          find openwrt/bin/packages -type f \
+            \( -name '*.apk' -o -name '*.ipk' \) -print
+
+          echo "===== PACKAGE BUILD COMPLETE ====="
+
+      - name: Upload AmneziaWG packages
         uses: actions/upload-artifact@v4
         with:
           name: amneziawg-cudy-tr3600
           path: openwrt/bin/packages/
           if-no-files-found: error
+          retention-days: 14
