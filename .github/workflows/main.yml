@@ -51,7 +51,11 @@ jobs:
           CONFIG_PACKAGE_luci-proto-amneziawg=y
           EOF
           make defconfig
-
+        - name: Prepare build tools
+          run: |
+            cd openwrt
+            make tools/install -j2
+            make toolchain/install -j2
       - name: Build AmneziaWG packages
         run: |
           cd openwrt
