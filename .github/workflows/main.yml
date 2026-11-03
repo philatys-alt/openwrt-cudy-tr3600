@@ -20,14 +20,35 @@ jobs:
             xz-utils libelf-dev python3 python3-setuptools swig curl \
             ca-certificates
 
-      - name: Prepare OpenWrt source
+      - name: Cache OpenWrt downloads
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: openwrt-dl-tr3600-25.12-v1
+          restore-keys: |
+            openwrt-dl-tr3600-25.12-
+
+      - name: Prepare exact TR3600 source
         run: |
           git clone --depth 1 -b openwrt-25.12 \
             https://github.com/openwrt/openwrt.git openwrt
+
           cd openwrt
+
           git fetch origin pull/24596/head
+
+          ACTUAL=$(git rev-parse --short=8 FETCH_HEAD)
+          echo "OpenWrt PR commit: $ACTUAL"
+
+          if [ "$ACTUAL" != "046aec0d" ]; then
+            echo "ERROR: PR source revision changed!"
+            exit 1
+          fi
+
           git checkout -f FETCH_HEAD
+
           git apply ../cudy-tr3600-v1-fixes.patch
+
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
@@ -35,23 +56,43 @@ jobs:
         run: |
           git clone --depth 1 \
             https://github.com/Slava-Shchipunov/awg-openwrt.git awg
+
           mkdir -p openwrt/package/awg
+
           cp -r awg/kmod-amneziawg openwrt/package/awg/
           cp -r awg/amneziawg-tools openwrt/package/awg/
           cp -r awg/luci-proto-amneziawg openwrt/package/awg/
 
-      - name: Configure TR3600
+      - name: Configure TR3600 and AmneziaWG
         run: |
           cd openwrt
+
           cat > .config <<'EOF'
           CONFIG_TARGET_mediatek=y
           CONFIG_TARGET_mediatek_filogic=y
           CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y
+
+          CONFIG_PACKAGE_kmod-wireguard=y
+          CONFIG_PACKAGE_wireguard-tools=y
+          CONFIG_PACKAGE_luci-proto-wireguard=y
+
+          CONFIG_PACKAGE_kmod-gre=y
+          CONFIG_PACKAGE_gre=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_ip-full=y
+
           CONFIG_PACKAGE_kmod-amneziawg=m
           CONFIG_PACKAGE_amneziawg-tools=y
           CONFIG_PACKAGE_luci-proto-amneziawg=y
           EOF
+
           make defconfig
+
+          grep -q "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y" .config
+          grep -q "CONFIG_PACKAGE_kmod-amneziawg=m" .config
+
+          echo "Build configuration:"
+          grep -E 'CONFIG_TARGET_mediatek|CONFIG_PACKAGE_(kmod-amneziawg|amneziawg-tools|luci-proto-amneziawg)' .config
 
       - name: Prepare build tools
         run: |
@@ -59,9 +100,15 @@ jobs:
           make tools/install -j2
           make toolchain/install -j2
 
+      - name: Build matching TR3600 kernel
+        run: |
+          cd openwrt
+          make -j2 target/linux/compile V=s
+
       - name: Build AmneziaWG packages
         run: |
           cd openwrt
+
           make -j2 package/awg/kmod-amneziawg/compile V=s
           make -j2 package/awg/amneziawg-tools/compile V=s
           make -j2 package/awg/luci-proto-amneziawg/compile V=s
