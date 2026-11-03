@@ -7,6 +7,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
       - name: Get TR3600 source
         uses: actions/checkout@v4
@@ -51,11 +52,13 @@ jobs:
           CONFIG_PACKAGE_luci-proto-amneziawg=y
           EOF
           make defconfig
-        - name: Prepare build tools
-          run: |
-            cd openwrt
-            make tools/install -j2
-            make toolchain/install -j2
+
+      - name: Prepare build tools
+        run: |
+          cd openwrt
+          make tools/install -j2
+          make toolchain/install -j2
+
       - name: Build AmneziaWG packages
         run: |
           cd openwrt
